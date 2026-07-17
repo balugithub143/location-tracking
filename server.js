@@ -1,20 +1,48 @@
 const express = require("express");
 const crypto = require("crypto");
+const Database = require("better-sqlite3");
+
 const app = express();
 app.use(express.json());
 
-// links: token -> { label, created }
-// hits: token -> [ {lat,lng,acc,at,ip}, ... ]  (latest last)
-const links = new Map();
-const hits = new Map();
+// --- Database --------------------------------------------------------------
+// DB_PATH lets you point at a mounted disk in production; defaults to a local file.
+const db = new Database(process.env.DB_PATH || "data.db");
+db.pragma("journal_mode = WAL");
+db.exec(`
+  CREATE TABLE IF NOT EXISTS links (
+    token   TEXT PRIMARY KEY,
+    label   TEXT NOT NULL,
+    created TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS hits (
+    id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    token TEXT NOT NULL,
+    lat   REAL NOT NULL,
+    lng   REAL NOT NULL,
+    acc   REAL,
+    at    TEXT NOT NULL,
+    ip    TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_hits_token ON hits(token);
+`);
+
+const q = {
+  insertLink: db.prepare("INSERT INTO links (token,label,created) VALUES (?,?,?)"),
+  getLink: db.prepare("SELECT * FROM links WHERE token=?"),
+  insertHit: db.prepare("INSERT INTO hits (token,lat,lng,acc,at,ip) VALUES (?,?,?,?,?,?)"),
+  latestPerLink: db.prepare(`
+    SELECT l.label, h.lat, h.lng, h.acc, h.at
+    FROM links l
+    JOIN hits h ON h.id = (SELECT id FROM hits WHERE token=l.token ORDER BY id DESC LIMIT 1)
+  `),
+};
 
 // --- Create a unique link for a person -------------------------------------
-// e.g. open http://localhost:3000/new?label=Alex
 app.get("/new", (req, res) => {
   const token = crypto.randomBytes(6).toString("hex");
   const label = (req.query.label || "unnamed").toString().slice(0, 40);
-  links.set(token, { label, created: new Date().toISOString() });
-  hits.set(token, []);
+  q.insertLink.run(token, label, new Date().toISOString());
   const base = `${req.protocol}://${req.get("host")}`;
   res.send(`<body style="font-family:sans-serif;padding:40px">
     <h2>Link created for "${label}"</h2>
@@ -27,7 +55,7 @@ app.get("/new", (req, res) => {
 // --- The page the person opens (per-token, live sharing) --------------------
 app.get("/t/:token", (req, res) => {
   const { token } = req.params;
-  if (!links.has(token)) return res.status(404).send("Unknown link.");
+  if (!q.getLink.get(token)) return res.status(404).send("Unknown link.");
   res.send(`<!doctype html>
 <html>
 <head><meta name="viewport" content="width=device-width, initial-scale=1"><title>Share location</title></head>
@@ -64,21 +92,15 @@ app.get("/t/:token", (req, res) => {
 // --- Receive a location update ---------------------------------------------
 app.post("/loc/:token", (req, res) => {
   const { token } = req.params;
-  if (!hits.has(token)) return res.status(404).json({ ok: false });
+  if (!q.getLink.get(token)) return res.status(404).json({ ok: false });
   const { lat, lng, acc } = req.body;
-  hits.get(token).push({ lat, lng, acc, at: new Date().toISOString(), ip: req.ip });
+  if (typeof lat !== "number" || typeof lng !== "number") return res.status(400).json({ ok: false });
+  q.insertHit.run(token, lat, lng, acc ?? null, new Date().toISOString(), req.ip);
   res.json({ ok: true });
 });
 
 // --- JSON feed for the map (latest point per person) -----------------------
-app.get("/feed", (req, res) => {
-  const out = [];
-  for (const [token, meta] of links) {
-    const arr = hits.get(token);
-    if (arr && arr.length) out.push({ label: meta.label, ...arr[arr.length - 1] });
-  }
-  res.json(out);
-});
+app.get("/feed", (req, res) => res.json(q.latestPerLink.all()));
 
 // --- Dashboard with a live map ---------------------------------------------
 app.get("/dashboard", (req, res) => {

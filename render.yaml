@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: location-tracking
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: DB_PATH
+        value: data.db
+    # NOTE: Render's free plan has an ephemeral disk — data.db resets on
+    # redeploy or wake-from-sleep. To persist across restarts, upgrade the
+    # plan and attach a disk, then point DB_PATH at its mount path, e.g.:
+    #
+    # plan: starter
+    # disk:
+    #   name: data
+    #   mountPath: /var/data
+    #   sizeGB: 1
+    # envVars:
+    #   - key: DB_PATH
+    #     value: /var/data/data.db
